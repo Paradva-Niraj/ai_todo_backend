@@ -7,6 +7,7 @@ env.config();
 
 //call routers 
 const auth = require("./auth/auth");
+const todos = require("./routes/todos");
 
 const app = express();
 app.use(cors());
@@ -20,5 +21,6 @@ app.get("/",(req,res)=>{
 });
 
 app.use('/api/auth',auth);
+app.use('/api/todos',todos);
 
-app.listen(3000,()=>{console.log("running in port 3000")})
+app.listen(3000,()=>{console.log("running in port 3000")});
