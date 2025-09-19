@@ -1,26 +1,39 @@
+// server.js
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
+const helmet = require("helmet");
+const morgan = require("morgan");
+require("dotenv").config();
 
-const env = require("dotenv");
-env.config();
-
-//call routers 
-const auth = require("./auth/auth");
-const todos = require("./routes/todos");
+const authRouter = require("./auth/auth");
+const todosRouter = require("./routes/todos");
+const categoriesRouter = require("./routes/categories");
 
 const app = express();
+
+// middleware
+app.use(helmet());
 app.use(cors());
 app.use(express.json());
+app.use(morgan("dev"));
 
-//connect database
-mongoose.connect(process.env.MONGODB_URI).then(()=>console.log("Connected to database")).catch((err)=>console.log(`error on connecting database ${err}`));
+// connect database
+const mongoUri = process.env.MONGODB_URI || "mongodb://localhost:27017/ai_todo_backend";
+mongoose
+  .connect(mongoUri)
+  .then(() => console.log("Connected to database"))
+  .catch((err) => console.error("Error on connecting database:", err));
 
-app.get("/",(req,res)=>{
-    res.send("server running");
+app.get("/", (req, res) => res.send("server running"));
+
+// routes
+app.use("/api/auth", authRouter);
+app.use("/api/todos", todosRouter);
+app.use("/api/categories", categoriesRouter);
+
+// port
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`running in port ${PORT}`);
 });
-
-app.use('/api/auth',auth);
-app.use('/api/todos',todos);
-
-app.listen(3000,()=>{console.log("running in port 3000")});
