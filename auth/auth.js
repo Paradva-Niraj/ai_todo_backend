@@ -31,7 +31,11 @@ router.post("/register", async (req, res) => {
     );
 
     console.log(`User registered: ${email} (${username})`);
-    res.status(201).json({ message: `User registered as ${username}`, token });
+    res.status(201).json({
+      message: `User registered successfully`,
+      token,
+      user: { id: newUser._id, username: newUser.username, email: newUser.email },
+    });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: "Internal server error, try again later" });
@@ -42,7 +46,9 @@ router.post("/register", async (req, res) => {
 router.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ error: "Email and password required" });
+    if (!email || !password) {
+      return res.status(400).json({ error: "Email and password required" });
+    }
 
     const user = await User.findOne({ email });
     if (!user) return res.status(404).json({ error: "User not found" });
@@ -57,7 +63,11 @@ router.post("/login", async (req, res) => {
     );
 
     console.log(`User login: ${email}`);
-    res.status(200).json({ message: `Login successful: ${user.username}`, token });
+    res.status(200).json({
+      message: `Login successful`,
+      token,
+      user: { id: user._id, username: user.username, email: user.email },
+    });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: "Internal server error, try again later" });

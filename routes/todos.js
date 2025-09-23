@@ -6,7 +6,7 @@ const Category = require("../models/category");
 const auth = require("../middleware/authMiddleware");
 
 // helpers
-const DAYS = ["sunday","monday","tuesday","wednesday","thursday","friday","saturday"];
+const DAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 
 function toDateWithTime(baseDate, hhmm) {
   if (!hhmm) return null;
@@ -68,30 +68,21 @@ router.post("/", auth, async (req, res) => {
 // ========================
 // GET today's feed
 // ========================
-// Returns:
-// {
-//   success: true,
-//   date: "2025-09-19",
-//   scheduleBlocks: [ { taskId, title, start, end, category, rawTask } ],
-//   occurrences: [ { taskId, title, occurrenceTime, blocked, taskType, category, rawTask } ]
-// }
 router.get("/today", auth, async (req, res) => {
   try {
     const userId = req.user.id;
-    const today = new Date(); // use server local timezone (if you need a specific TZ, convert here)
+    const today = new Date();
     const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
     const endOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999);
     const weekday = getWeekdayName(today);
 
-    // fetch all user's todos (we'll filter in JS)
     const all = await Todo.find({ user: userId }).populate("category");
 
     const scheduleBlocks = [];
     const occurrences = [];
 
-    // build schedule blocks and occurrences
     all.forEach((t) => {
-      // schedule-block type -> create block entries for today's matching schedule entries
+      // schedule-block type
       if (t.type === "schedule-block" && Array.isArray(t.schedule)) {
         t.schedule.forEach((entry) => {
           if (entry.day.toLowerCase() === weekday) {
@@ -109,9 +100,8 @@ router.get("/today", auth, async (req, res) => {
         });
       }
 
-      // recurring / reminder / one-time occurrences
-      // 1) recurring.daily
-      if (t.type === "recurring" && t.recurrence && t.recurrence.type === "daily") {
+      // recurring.daily
+      if (t.type === "recurring" && t.recurrence?.type === "daily") {
         const timeStr = t.recurrence.time || t.time;
         if (timeStr) {
           occurrences.push({
@@ -126,8 +116,8 @@ router.get("/today", auth, async (req, res) => {
         }
       }
 
-      // 2) recurring.weekly
-      if (t.type === "recurring" && t.recurrence && t.recurrence.type === "weekly") {
+      // recurring.weekly
+      if (t.type === "recurring" && t.recurrence?.type === "weekly") {
         const days = (t.recurrence.days || []).map((d) => d.toLowerCase());
         if (days.includes(weekday)) {
           const timeStr = t.recurrence.time || t.time;
@@ -143,7 +133,7 @@ router.get("/today", auth, async (req, res) => {
         }
       }
 
-      // 3) reminder (time every day or explicit date+time)
+      // reminder
       if (t.type === "reminder") {
         if (t.time) {
           occurrences.push({
@@ -156,7 +146,6 @@ router.get("/today", auth, async (req, res) => {
             blocked: false,
           });
         } else if (t.date && t.date >= startOfDay && t.date <= endOfDay) {
-          // fallback if date is present
           occurrences.push({
             taskId: t._id,
             title: t.title,
@@ -169,11 +158,10 @@ router.get("/today", auth, async (req, res) => {
         }
       }
 
-      // 4) one-time with date equals today
+      // one-time today
       if (t.type === "one-time" && t.date) {
         const d = new Date(t.date);
         if (d >= startOfDay && d <= endOfDay) {
-          // prefer startTime if present, else use date (date may include time)
           const occ = t.startTime ? new Date(t.startTime) : d;
           occurrences.push({
             taskId: t._id,
@@ -187,7 +175,7 @@ router.get("/today", auth, async (req, res) => {
         }
       }
 
-      // 5) fallback: floating todos (no time/date) - show as end-of-day with null time
+      // floating one-time todos
       if (!t.date && !t.time && t.type === "one-time") {
         occurrences.push({
           taskId: t._id,
@@ -201,7 +189,7 @@ router.get("/today", auth, async (req, res) => {
       }
     });
 
-    // mark occurrences that fall inside any scheduleBlock as blocked
+    // mark blocked
     occurrences.forEach((occ) => {
       if (!occ.occurrenceTime) return;
       for (const b of scheduleBlocks) {
@@ -213,15 +201,13 @@ router.get("/today", auth, async (req, res) => {
       }
     });
 
-    // Sort: timed occurrences ascending (earlier first), then floating (null time) at the end.
+    // sort
     occurrences.sort((a, b) => {
       if (!a.occurrenceTime && !b.occurrenceTime) return 0;
       if (!a.occurrenceTime) return 1;
       if (!b.occurrenceTime) return -1;
       return a.occurrenceTime - b.occurrenceTime;
     });
-
-    // also sort schedule blocks by start
     scheduleBlocks.sort((a, b) => a.start - b.start);
 
     res.json({
@@ -237,7 +223,7 @@ router.get("/today", auth, async (req, res) => {
 });
 
 // ========================
-// READ all todos (optional filter by date)
+// READ all todos
 // ========================
 router.get("/", auth, async (req, res) => {
   try {
