@@ -11,12 +11,58 @@ const DAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", 
 function toDateWithTime(baseDate, hhmm) {
   if (!hhmm) return null;
   const [hh, mm] = hhmm.split(":").map((n) => parseInt(n, 10));
-  const d = new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate(), hh || 0, mm || 0, 0, 0);
+  const d = new Date(
+    baseDate.getFullYear(),
+    baseDate.getMonth(),
+    baseDate.getDate(),
+    hh || 0,
+    mm || 0,
+    0,
+    0
+  );
   return d;
 }
 
 function getWeekdayName(date) {
   return DAYS[date.getDay()];
+}
+
+function parseDateStr(dateStr) {
+  if (!dateStr) return null;
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return null;
+  const start = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
+  const end = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
+  return { start, end };
+}
+
+// ------------------------
+// Recurrence validation
+// ------------------------
+function validateRecurrence(recurrence, res) {
+  if (!recurrence) return null;
+
+  if (recurrence.type === "weekly") {
+    const allowed = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+    if (!Array.isArray(recurrence.days)) {
+      return res.status(400).json({ success: false, error: "Weekly recurrence requires days array" });
+    }
+    const invalid = recurrence.days.some((d) => !allowed.includes(d.toLowerCase()));
+    if (invalid) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid weekly days (allowed: monday..saturday)",
+      });
+    }
+  }
+
+  if (recurrence.type === "daily") {
+    if (recurrence.time && !/^\d{2}:\d{2}$/.test(recurrence.time)) {
+      return res.status(400).json({ success: false, error: "Invalid daily recurrence time format (HH:mm)" });
+    }
+  }
+
+  return null; // valid
 }
 
 // ========================
@@ -40,6 +86,10 @@ router.post("/", auth, async (req, res) => {
     } = req.body;
 
     if (!title) return res.status(400).json({ success: false, error: "Title required" });
+
+    // validate recurrence if present
+    const recurrenceError = validateRecurrence(recurrence, res);
+    if (recurrenceError) return recurrenceError;
 
     const todo = new Todo({
       user: req.user.id,
@@ -223,6 +273,92 @@ router.get("/today", auth, async (req, res) => {
 });
 
 // ========================
+// GET todos in a date range
+// ========================
+router.get("/range", auth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { start: startStr, end: endStr } = req.query;
+    const startObj = parseDateStr(startStr);
+    const endObj = parseDateStr(endStr);
+    if (!startObj || !endObj) return res.status(400).json({ success: false, error: "Invalid start/end date" });
+
+    const todos = await Todo.find({ user: userId }).populate("category");
+
+    const results = [];
+
+    for (const t of todos) {
+      if (t.type === "one-time") {
+        if (t.date) {
+          const d = new Date(t.date);
+          if (d >= startObj.start && d <= endObj.end) results.push(t);
+        } else {
+          results.push(t);
+        }
+      } else if (t.type === "reminder") {
+        if (t.date) {
+          const d = new Date(t.date);
+          if (d >= startObj.start && d <= endObj.end) results.push(t);
+        } else {
+          results.push(t);
+        }
+      } else if (t.type === "recurring") {
+        results.push(t);
+      } else if (t.type === "schedule-block") {
+        results.push(t);
+      } else {
+        results.push(t);
+      }
+    }
+
+    res.json({ success: true, count: results.length, data: results });
+  } catch (err) {
+    console.error("Range fetch error:", err);
+    res.status(500).json({ success: false, error: "Server error while fetching range" });
+  }
+});
+
+// ========================
+// Mark todo complete
+// ========================
+router.patch("/:id/complete", auth, async (req, res) => {
+  try {
+    const todo = await Todo.findOne({ _id: req.params.id, user: req.user.id });
+    if (!todo) return res.status(404).json({ success: false, error: "Todo not found" });
+
+    const dateStr = req.query.date;
+    if (dateStr) {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return res.status(400).json({ success: false, error: "Invalid date" });
+
+      const normalized = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
+
+      const already = (todo.completions || []).some((c) => {
+        const cd = new Date(c.date);
+        return cd.getFullYear() === normalized.getFullYear() &&
+               cd.getMonth() === normalized.getMonth() &&
+               cd.getDate() === normalized.getDate();
+      });
+      if (already) return res.status(409).json({ success: false, error: "Already completed for this date" });
+
+      todo.completions = todo.completions || [];
+      todo.completions.push({ date: normalized });
+      await todo.save();
+      return res.json({ success: true, data: todo, completedFor: dateStr });
+    } else {
+      if (todo.completed) return res.status(409).json({ success: false, error: "Todo already completed" });
+      todo.completed = true;
+      todo.status = "completed";
+      await todo.save();
+      return res.json({ success: true, data: todo });
+    }
+  } catch (err) {
+    console.error("Complete todo error:", err);
+    res.status(500).json({ success: false, error: "Server error while marking complete" });
+  }
+});
+
+// ========================
 // READ all todos
 // ========================
 router.get("/", auth, async (req, res) => {
@@ -264,6 +400,23 @@ router.get("/:id", auth, async (req, res) => {
 router.put("/:id", auth, async (req, res) => {
   try {
     const updateData = req.body;
+
+    const existing = await Todo.findOne({ _id: req.params.id, user: req.user.id });
+    if (!existing) return res.status(404).json({ success: false, error: "Todo not found" });
+    if (existing.completed) return res.status(403).json({ success: false, error: "Completed todos cannot be edited" });
+
+    const now = new Date();
+    if (existing.date) {
+      const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+      if (existing.date < startOfToday) {
+        return res.status(403).json({ success: false, error: "Past todos cannot be edited" });
+      }
+    }
+
+    // validate recurrence if present
+    const recurrenceError = validateRecurrence(updateData.recurrence, res);
+    if (recurrenceError) return recurrenceError;
+
     const todo = await Todo.findOneAndUpdate({ _id: req.params.id, user: req.user.id }, updateData, {
       new: true,
       runValidators: true,
@@ -281,12 +434,58 @@ router.put("/:id", auth, async (req, res) => {
 // ========================
 router.delete("/:id", auth, async (req, res) => {
   try {
+    const existing = await Todo.findOne({ _id: req.params.id, user: req.user.id });
+    if (!existing) return res.status(404).json({ success: false, error: "Todo not found" });
+    if (existing.completed) return res.status(403).json({ success: false, error: "Completed todos cannot be deleted" });
+
+    const now = new Date();
+    if (existing.date) {
+      const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+      if (existing.date < startOfToday) {
+        return res.status(403).json({ success: false, error: "Past todos cannot be deleted" });
+      }
+    }
+
     const todo = await Todo.findOneAndDelete({ _id: req.params.id, user: req.user.id });
     if (!todo) return res.status(404).json({ success: false, error: "Todo not found" });
     res.json({ success: true, message: "Todo deleted successfully" });
   } catch (err) {
     console.error("Delete todo error:", err);
     res.status(500).json({ success: false, error: "Server error while deleting todo" });
+  }
+});
+
+// Check if a todo is completed (global or for a specific date)
+// GET /api/todos/:id/completed?date=YYYY-MM-DD
+router.get("/:id/completed", auth, async (req, res) => {
+  try {
+    const todo = await Todo.findOne({ _id: req.params.id, user: req.user.id });
+    if (!todo) return res.status(404).json({ success: false, error: "Todo not found" });
+
+    const dateStr = req.query.date;
+    let completedForDate = false;
+    if (dateStr) {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return res.status(400).json({ success: false, error: "Invalid date" });
+      const normalized = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
+      const comps = todo.completions || [];
+      completedForDate = comps.some((c) => {
+        const cd = new Date(c.date);
+        return cd.getFullYear() === normalized.getFullYear() &&
+               cd.getMonth() === normalized.getMonth() &&
+               cd.getDate() === normalized.getDate();
+      });
+    }
+
+    return res.json({
+      success: true,
+      global: !!todo.completed,
+      date: dateStr || null,
+      completed: dateStr ? completedForDate : !!todo.completed,
+    });
+  } catch (err) {
+    console.error("Check completed error:", err);
+    return res.status(500).json({ success: false, error: "Server error" });
   }
 });
 

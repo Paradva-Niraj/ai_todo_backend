@@ -90,7 +90,7 @@ const todoSchema = new mongoose.Schema(
 
     estimatedMinutes: { type: Number },
     actualMinutes: { type: Number },
-
+    completions: [{ date: Date }],
     createdByAI: { type: Boolean, default: false },
   },
   { timestamps: true }
