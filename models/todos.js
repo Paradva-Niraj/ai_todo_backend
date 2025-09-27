@@ -97,6 +97,6 @@ const todoSchema = new mongoose.Schema(
 );
 
 // index by user (common queries)
-todoSchema.index({ user: 1 });
+// todoSchema.index({ user: 1 });
 
 module.exports = mongoose.model("Todo", todoSchema);

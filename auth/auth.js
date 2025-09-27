@@ -32,7 +32,8 @@ router.post("/register", async (req, res) => {
 
     console.log(`User registered: ${email} (${username})`);
     res.status(201).json({
-      message: `User registered successfully`,
+      ok: true,
+      message: "User registered successfully",
       token,
       user: { id: newUser._id, username: newUser.username, email: newUser.email },
     });
@@ -51,10 +52,10 @@ router.post("/login", async (req, res) => {
     }
 
     const user = await User.findOne({ email });
-    if (!user) return res.status(404).json({ error: "User not found" });
+    if (!user) return res.status(404).json({ ok: false, message: "User not found" });
 
     const passMatch = await bcrypt.compare(password, user.password);
-    if (!passMatch) return res.status(401).json({ error: "Invalid credentials" });
+    if (!passMatch) return res.status(401).json({ ok: false, message: "Invalid credentials" });
 
     const token = jwt.sign(
       { id: user._id, name: user.username, email: user.email },
@@ -64,7 +65,8 @@ router.post("/login", async (req, res) => {
 
     console.log(`User login: ${email}`);
     res.status(200).json({
-      message: `Login successful`,
+      ok: true,
+      message: "Login successful",
       token,
       user: { id: user._id, username: user.username, email: user.email },
     });
