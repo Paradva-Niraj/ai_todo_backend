@@ -10,32 +10,37 @@ const DAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", 
 
 function toDateWithTime(baseDate, hhmm) {
   if (!hhmm) return null;
-  const [hh, mm] = hhmm.split(":").map((n) => parseInt(n, 10));
-  const d = new Date(
+  const parts = hhmm.split(":").map((n) => parseInt(n, 10));
+  const hh = isNaN(parts[0]) ? 0 : parts[0];
+  const mm = isNaN(parts[1]) ? 0 : parts[1];
+  return new Date(
     baseDate.getFullYear(),
     baseDate.getMonth(),
     baseDate.getDate(),
-    hh || 0,
-    mm || 0,
+    hh,
+    mm,
     0,
     0
   );
-  return d;
 }
 
 function getWeekdayName(date) {
   return DAYS[date.getDay()];
 }
 
+// Parse YYYY-MM-DD or ISO and return local-start and local-end and normalized local midnight and dateStr
 function parseDateStr(dateStr) {
   if (!dateStr) return null;
-  const d = new Date(dateStr);
-  if (isNaN(d.getTime())) return null;
-  const start = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
-  const end = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
+  // Parse as local date, not UTC
+  const [year, month, day] = dateStr.split('-').map(n => parseInt(n, 10));
+  if (!year || !month || !day) return null;
+  
+  const start = new Date(year, month - 1, day, 0, 0, 0, 0);
+  const end = new Date(year, month - 1, day, 23, 59, 59, 999);
+  
+  if (isNaN(start.getTime())) return null;
   return { start, end };
 }
-
 // ------------------------
 // Recurrence validation
 // ------------------------
@@ -43,21 +48,21 @@ function validateRecurrence(recurrence, res) {
   if (!recurrence) return null;
 
   if (recurrence.type === "weekly") {
-    const allowed = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+    const allowed = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
     if (!Array.isArray(recurrence.days)) {
       return res.status(400).json({ success: false, error: "Weekly recurrence requires days array" });
     }
-    const invalid = recurrence.days.some((d) => !allowed.includes(d.toLowerCase()));
+    const invalid = recurrence.days.some((d) => !allowed.includes((d || "").toString().toLowerCase()));
     if (invalid) {
       return res.status(400).json({
         success: false,
-        error: "Invalid weekly days (allowed: monday..saturday)",
+        error: "Invalid weekly days (allowed: sunday..saturday)",
       });
     }
   }
 
   if (recurrence.type === "daily") {
-    if (recurrence.time && !/^\d{2}:\d{2}$/.test(recurrence.time)) {
+    if (recurrence.time && !/^\d{1,2}:\d{2}$/.test(recurrence.time)) {
       return res.status(400).json({ success: false, error: "Invalid daily recurrence time format (HH:mm)" });
     }
   }
@@ -75,7 +80,7 @@ router.post("/", auth, async (req, res) => {
       description,
       type,
       date,
-      time, // "HH:mm"
+      time,
       recurrence,
       schedule,
       startTime,
@@ -87,16 +92,14 @@ router.post("/", auth, async (req, res) => {
 
     if (!title) return res.status(400).json({ success: false, error: "Title required" });
 
-    // validate recurrence if present
     const recurrenceError = validateRecurrence(recurrence, res);
     if (recurrenceError) return recurrenceError;
 
-    const todo = new Todo({
+    const todoData = {
       user: req.user.id,
       title,
       description,
       type: type || "one-time",
-      date: date ? new Date(date) : undefined,
       time,
       recurrence,
       schedule,
@@ -105,10 +108,18 @@ router.post("/", auth, async (req, res) => {
       category: categoryId,
       priority,
       tags,
-    });
+      completions: [],
+    };
 
+    if (date) {
+      const pd = parseDateStr(date);
+      todoData.date = pd ? pd.normalized : new Date(date);
+    }
+
+    const todo = new Todo(todoData);
     await todo.save();
-    res.status(201).json({ success: true, data: todo });
+    const populated = await Todo.findById(todo._id).populate("category");
+    res.status(201).json({ success: true, data: populated });
   } catch (err) {
     console.error("Create todo error:", err);
     res.status(500).json({ success: false, error: "Server error while creating todo" });
@@ -132,10 +143,9 @@ router.get("/today", auth, async (req, res) => {
     const occurrences = [];
 
     all.forEach((t) => {
-      // schedule-block type
       if (t.type === "schedule-block" && Array.isArray(t.schedule)) {
         t.schedule.forEach((entry) => {
-          if (entry.day.toLowerCase() === weekday) {
+          if (entry.day && entry.day.toLowerCase() === weekday) {
             const start = toDateWithTime(startOfDay, entry.start);
             const end = toDateWithTime(startOfDay, entry.end);
             scheduleBlocks.push({
@@ -150,31 +160,27 @@ router.get("/today", auth, async (req, res) => {
         });
       }
 
-      // recurring.daily
       if (t.type === "recurring" && t.recurrence?.type === "daily") {
-        const timeStr = t.recurrence.time || t.time;
-        if (timeStr) {
-          occurrences.push({
-            taskId: t._id,
-            title: t.title,
-            occurrenceTime: toDateWithTime(startOfDay, timeStr),
-            taskType: t.type,
-            category: t.category || null,
-            rawTask: t,
-            blocked: false,
-          });
-        }
+        const timeStr = (t.recurrence && t.recurrence.time) || t.time;
+        occurrences.push({
+          taskId: t._id,
+          title: t.title,
+          occurrenceTime: timeStr ? toDateWithTime(startOfDay, timeStr) : null,
+          taskType: t.type,
+          category: t.category || null,
+          rawTask: t,
+          blocked: false,
+        });
       }
 
-      // recurring.weekly
       if (t.type === "recurring" && t.recurrence?.type === "weekly") {
-        const days = (t.recurrence.days || []).map((d) => d.toLowerCase());
+        const days = (t.recurrence.days || []).map((d) => (d ? d.toLowerCase() : ""));
         if (days.includes(weekday)) {
-          const timeStr = t.recurrence.time || t.time;
+          const timeStr = (t.recurrence && t.recurrence.time) || t.time;
           occurrences.push({
             taskId: t._id,
             title: t.title,
-            occurrenceTime: toDateWithTime(startOfDay, timeStr),
+            occurrenceTime: timeStr ? toDateWithTime(startOfDay, timeStr) : null,
             taskType: t.type,
             category: t.category || null,
             rawTask: t,
@@ -183,7 +189,6 @@ router.get("/today", auth, async (req, res) => {
         }
       }
 
-      // reminder
       if (t.type === "reminder") {
         if (t.time) {
           occurrences.push({
@@ -205,10 +210,19 @@ router.get("/today", auth, async (req, res) => {
             rawTask: t,
             blocked: false,
           });
+        } else if (!t.date && !t.time) {
+          occurrences.push({
+            taskId: t._id,
+            title: t.title,
+            occurrenceTime: null,
+            taskType: t.type,
+            category: t.category || null,
+            rawTask: t,
+            blocked: false,
+          });
         }
       }
 
-      // one-time today
       if (t.type === "one-time" && t.date) {
         const d = new Date(t.date);
         if (d >= startOfDay && d <= endOfDay) {
@@ -225,7 +239,6 @@ router.get("/today", auth, async (req, res) => {
         }
       }
 
-      // floating one-time todos
       if (!t.date && !t.time && t.type === "one-time") {
         occurrences.push({
           taskId: t._id,
@@ -239,7 +252,6 @@ router.get("/today", auth, async (req, res) => {
       }
     });
 
-    // mark blocked
     occurrences.forEach((occ) => {
       if (!occ.occurrenceTime) return;
       for (const b of scheduleBlocks) {
@@ -251,7 +263,6 @@ router.get("/today", auth, async (req, res) => {
       }
     });
 
-    // sort
     occurrences.sort((a, b) => {
       if (!a.occurrenceTime && !b.occurrenceTime) return 0;
       if (!a.occurrenceTime) return 1;
@@ -318,9 +329,6 @@ router.get("/range", auth, async (req, res) => {
   }
 });
 
-// ========================
-// Mark todo complete
-// ========================
 router.patch("/:id/complete", auth, async (req, res) => {
   try {
     const todo = await Todo.findOne({ _id: req.params.id, user: req.user.id });
@@ -328,25 +336,52 @@ router.patch("/:id/complete", auth, async (req, res) => {
 
     const dateStr = req.query.date;
     if (dateStr) {
-      const d = new Date(dateStr);
-      if (isNaN(d.getTime())) return res.status(400).json({ success: false, error: "Invalid date" });
+      // Validate format
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Invalid date format. Use YYYY-MM-DD" 
+        });
+      }
 
-      const normalized = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
+      // Parse as UTC by appending 'T00:00:00.000Z'
+      // This prevents timezone conversion
+      const normalized = new Date(`${dateStr}T00:00:00.000Z`);
 
+      if (isNaN(normalized.getTime())) {
+        return res.status(400).json({ success: false, error: "Invalid date" });
+      }
+
+      // Check if already completed for this date
       const already = (todo.completions || []).some((c) => {
         const cd = new Date(c.date);
-        return cd.getFullYear() === normalized.getFullYear() &&
-               cd.getMonth() === normalized.getMonth() &&
-               cd.getDate() === normalized.getDate();
+        const cdStr = cd.toISOString().split('T')[0];
+        return cdStr === dateStr;
       });
-      if (already) return res.status(409).json({ success: false, error: "Already completed for this date" });
+
+      if (already) {
+        return res.status(409).json({ 
+          success: false, 
+          error: "Already completed for this date"
+        });
+      }
 
       todo.completions = todo.completions || [];
       todo.completions.push({ date: normalized });
       await todo.save();
-      return res.json({ success: true, data: todo, completedFor: dateStr });
+
+      console.log(`Todo ${todo._id} marked complete for date: ${dateStr} (stored as ${normalized.toISOString()})`);
+
+      return res.json({ 
+        success: true, 
+        data: todo, 
+        completedFor: dateStr
+      });
     } else {
-      if (todo.completed) return res.status(409).json({ success: false, error: "Todo already completed" });
+      // Global completion
+      if (todo.completed) {
+        return res.status(409).json({ success: false, error: "Todo already completed" });
+      }
       todo.completed = true;
       todo.status = "completed";
       await todo.save();
@@ -354,7 +389,65 @@ router.patch("/:id/complete", auth, async (req, res) => {
     }
   } catch (err) {
     console.error("Complete todo error:", err);
-    res.status(500).json({ success: false, error: "Server error while marking complete" });
+    return res.status(500).json({ 
+      success: false, 
+      error: "Server error while marking complete" 
+    });
+  }
+});
+
+
+// ========================
+// Uncomplete (remove per-date completion)
+// PATCH /api/todos/:id/uncomplete?date=YYYY-MM-DD
+router.patch("/:id/uncomplete", auth, async (req, res) => {
+  try {
+    const todo = await Todo.findOne({ _id: req.params.id, user: req.user.id });
+    if (!todo) return res.status(404).json({ success: false, error: "Todo not found" });
+
+    const dateStr = req.query.date;
+    if (!dateStr) {
+      return res.status(400).json({ success: false, error: "Date parameter required" });
+    }
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+      return res.status(400).json({ 
+        success: false, 
+        error: "Invalid date format" 
+      });
+    }
+
+    const initialLength = (todo.completions || []).length;
+    
+    // Filter by comparing ISO date strings
+    todo.completions = (todo.completions || []).filter((c) => {
+      const cd = new Date(c.date);
+      const cdStr = cd.toISOString().split('T')[0];
+      return cdStr !== dateStr;
+    });
+
+    if (todo.completions.length === initialLength) {
+      return res.status(404).json({ 
+        success: false, 
+        error: "No completion found for this date" 
+      });
+    }
+
+    await todo.save();
+
+    console.log(`Todo ${todo._id} uncompleted for date: ${dateStr}`);
+
+    return res.json({ 
+      success: true, 
+      data: todo, 
+      message: "Completion removed" 
+    });
+  } catch (err) {
+    console.error("Uncomplete todo error:", err);
+    return res.status(500).json({ 
+      success: false, 
+      error: "Server error while uncompleting todo" 
+    });
   }
 });
 
@@ -366,10 +459,9 @@ router.get("/", auth, async (req, res) => {
     const query = { user: req.user.id };
 
     if (req.query.date) {
-      const start = new Date(req.query.date);
-      const end = new Date(req.query.date);
-      end.setHours(23, 59, 59, 999);
-      query.date = { $gte: start, $lt: end };
+      const parsed = parseDateStr(req.query.date);
+      if (!parsed) return res.status(400).json({ success: false, error: "Invalid date" });
+      query.date = { $gte: parsed.start, $lt: parsed.end };
     }
 
     const todos = await Todo.find(query).populate("category").sort({ priority: -1, createdAt: -1 });
@@ -413,14 +505,18 @@ router.put("/:id", auth, async (req, res) => {
       }
     }
 
-    // validate recurrence if present
     const recurrenceError = validateRecurrence(updateData.recurrence, res);
     if (recurrenceError) return recurrenceError;
+
+    if (updateData.date && typeof updateData.date === "string") {
+      const pd = parseDateStr(updateData.date);
+      if (pd) updateData.date = pd.normalized;
+    }
 
     const todo = await Todo.findOneAndUpdate({ _id: req.params.id, user: req.user.id }, updateData, {
       new: true,
       runValidators: true,
-    });
+    }).populate("category");
     if (!todo) return res.status(404).json({ success: false, error: "Todo not found" });
     res.json({ success: true, data: todo });
   } catch (err) {
@@ -452,40 +548,6 @@ router.delete("/:id", auth, async (req, res) => {
   } catch (err) {
     console.error("Delete todo error:", err);
     res.status(500).json({ success: false, error: "Server error while deleting todo" });
-  }
-});
-
-// Check if a todo is completed (global or for a specific date)
-// GET /api/todos/:id/completed?date=YYYY-MM-DD
-router.get("/:id/completed", auth, async (req, res) => {
-  try {
-    const todo = await Todo.findOne({ _id: req.params.id, user: req.user.id });
-    if (!todo) return res.status(404).json({ success: false, error: "Todo not found" });
-
-    const dateStr = req.query.date;
-    let completedForDate = false;
-    if (dateStr) {
-      const d = new Date(dateStr);
-      if (isNaN(d.getTime())) return res.status(400).json({ success: false, error: "Invalid date" });
-      const normalized = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
-      const comps = todo.completions || [];
-      completedForDate = comps.some((c) => {
-        const cd = new Date(c.date);
-        return cd.getFullYear() === normalized.getFullYear() &&
-               cd.getMonth() === normalized.getMonth() &&
-               cd.getDate() === normalized.getDate();
-      });
-    }
-
-    return res.json({
-      success: true,
-      global: !!todo.completed,
-      date: dateStr || null,
-      completed: dateStr ? completedForDate : !!todo.completed,
-    });
-  } catch (err) {
-    console.error("Check completed error:", err);
-    return res.status(500).json({ success: false, error: "Server error" });
   }
 });
 
