@@ -28,18 +28,27 @@ function getWeekdayName(date) {
   return DAYS[date.getDay()];
 }
 
-// Parse YYYY-MM-DD or ISO and return local-start and local-end and normalized local midnight and dateStr
+// Parse YYYY-MM-DD or ISO and return:
+// - start: local-start-of-day (used for comparisons / range queries)
+// - end: local-end-of-day
+// - normalizedUtc: UTC-midnight Date for storing date-only values (so ISO shows same date)
 function parseDateStr(dateStr) {
   if (!dateStr) return null;
-  // Parse as local date, not UTC
+  // Parse as Y-M-D integers
   const [year, month, day] = dateStr.split('-').map(n => parseInt(n, 10));
   if (!year || !month || !day) return null;
-  
+
+  // local start and end (useful for range comparisons in local timezone)
   const start = new Date(year, month - 1, day, 0, 0, 0, 0);
   const end = new Date(year, month - 1, day, 23, 59, 59, 999);
-  
+
   if (isNaN(start.getTime())) return null;
-  return { start, end };
+
+  // normalizedUtc is a Date at 00:00:00 UTC for this calendar date.
+  // Storing this prevents the visible date from shifting when converted to/from UTC.
+  const normalizedUtc = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
+
+  return { start, end, normalizedUtc };
 }
 // ------------------------
 // Recurrence validation
@@ -113,7 +122,8 @@ router.post("/", auth, async (req, res) => {
 
     if (date) {
       const pd = parseDateStr(date);
-      todoData.date = pd ? pd.normalized : new Date(date);
+      // store normalizedUtc (UTC midnight) so the stored ISO date matches the calendar date
+      todoData.date = pd ? pd.normalizedUtc : new Date(date);
     }
 
     const todo = new Todo(todoData);
@@ -396,7 +406,6 @@ router.patch("/:id/complete", auth, async (req, res) => {
   }
 });
 
-
 // ========================
 // Uncomplete (remove per-date completion)
 // PATCH /api/todos/:id/uncomplete?date=YYYY-MM-DD
@@ -461,6 +470,7 @@ router.get("/", auth, async (req, res) => {
     if (req.query.date) {
       const parsed = parseDateStr(req.query.date);
       if (!parsed) return res.status(400).json({ success: false, error: "Invalid date" });
+      // use local start/end for query comparisons
       query.date = { $gte: parsed.start, $lt: parsed.end };
     }
 
@@ -510,7 +520,13 @@ router.put("/:id", auth, async (req, res) => {
 
     if (updateData.date && typeof updateData.date === "string") {
       const pd = parseDateStr(updateData.date);
-      if (pd) updateData.date = pd.normalized;
+      if (pd) {
+        // save UTC-normalized date to avoid cross-timezone shifts
+        updateData.date = pd.normalizedUtc;
+      } else {
+        // attempt parse fallback
+        updateData.date = new Date(updateData.date);
+      }
     }
 
     const todo = await Todo.findOneAndUpdate({ _id: req.params.id, user: req.user.id }, updateData, {
