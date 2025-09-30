@@ -9,6 +9,7 @@ require("dotenv").config();
 const authRouter = require("./auth/auth");
 const todosRouter = require("./routes/todos");
 const categoriesRouter = require("./routes/categories");
+const aiRouter = require('./routes/ai');
 
 const app = express();
 
@@ -35,6 +36,7 @@ app.get("/", (req, res) => res.send("server running"));
 app.use("/api/auth", authRouter);
 app.use("/api/todos", todosRouter);
 app.use("/api/categories", categoriesRouter);
+app.use('/api/ai', aiRouter);
 
 // start server
 const PORT = process.env.PORT || 3000;
