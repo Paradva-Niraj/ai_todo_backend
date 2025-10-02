@@ -20,7 +20,7 @@ app.use(express.json());
 app.use(morgan("dev"));
 
 // connect database
-const mongoUri = process.env.MONGODB_URI || "mongodb://localhost:27017/ai_todo_backend";
+const mongoUri = process.env.MONGODB_URI;
 mongoose
   .connect(mongoUri)
   .then(() => console.log("Connected to database"))
