@@ -653,24 +653,20 @@ Contributions are welcome! Please:
 This project is licensed under the MIT License - see [LICENSE](LICENSE) file.
 
 ## 👨‍💻 Author
-
-**Your Name**
-- GitHub: [@yourusername](https://github.com/yourusername)
-- Email: your.email@example.com
+**Niraj Paradva**
 
 ## 🙏 Acknowledgments
 
 - Express.js team
 - MongoDB team
 - Google Gemini AI team
-- Open source community
 
 ## 📞 Support
 
 For issues:
 - Open GitHub issue
-- Email: support@example.com
-- Documentation: [Wiki](#)
+- Email: nirajparadva2004@gmail.com
+
 
 ---
 
